@@ -37,6 +37,8 @@ const FILAMENT_AREA = (d) => Math.PI * (d / 2) ** 2;
  * @param {object} [opts]
  * @param {object} [opts.parsed]    a parse of `text`, if the caller already has one
  * @param {object} [opts.original]  parse result of the file this was derived from
+ * @param {string} [opts.originalText]  its text, for holding the edit to that
+ *   file's own end sequence rather than to one printer's
  * @param {Array}  [opts.ops]       the edit ops, for context in messages
  * @returns {{ok:boolean, errors:Array, warnings:Array, stats:object, limits:object}}
  */
@@ -262,16 +264,31 @@ export function validate(text, opts = {}) {
   }
 
   // ---- 8. the end sequence -------------------------------------------------
-  const tail = text.slice(-200000);
-  const required = [
-    [';PRINT_END', 'the end-of-print marker'],
-    ['M104 S0', 'turn the hotend off'],
-    ['M140 S0', 'turn the bed off'],
-    ['M84', 'disable the steppers'],
-    ['; EXECUTABLE_BLOCK_END', 'the end of the executable block'],
-  ];
-  for (const [needle, what] of required) {
-    if (!tail.includes(needle)) err('END_SEQUENCE', `the file no longer ends with ${what} (\`${needle}\` is missing)`);
+  // What a correct ending looks like is the machine profile's business, not
+  // this file's. So an EDIT is held against the ending the source file actually
+  // had: every shutdown marker that was there has to still be there. For this
+  // printer that is the same five markers as before, and for any other printer
+  // it is that printer's own. A file validated on its own has no source to
+  // compare with, so it only has to shut the machine down at all.
+  const tail = executableTail(text);
+  const endMarkers = { found: markersIn(tail), required: [] };
+  if (opts.originalText) {
+    endMarkers.required = markersIn(executableTail(String(opts.originalText)));
+    const have = new Set(endMarkers.found.map((m) => m.token));
+    for (const m of endMarkers.required) {
+      if (!have.has(m.token)) {
+        err('END_SEQUENCE', `the file no longer ends with ${m.what} (\`${m.token}\` is missing, and the file this was derived from has it)`);
+      }
+    }
+  } else {
+    for (const group of ['hotend', 'steppers']) {
+      if (!endMarkers.found.some((m) => m.group === group)) {
+        err('END_SEQUENCE', `the file does not end by ${GROUP_WHAT[group]} — no ${END_MARKERS.filter((m) => m.group === group).map((m) => '`' + m.token + '`').join(' / ')}`);
+      }
+    }
+    if (!endMarkers.found.some((m) => m.group === 'bed')) {
+      warn('END_SEQUENCE', 'the file does not turn the bed heater off at the end');
+    }
   }
   if (!text.includes('; CONFIG_BLOCK_START') || !text.includes('; CONFIG_BLOCK_END')) {
     warn('NO_CONFIG_BLOCK', 'the CONFIG_BLOCK is missing, so A/B settings diff will not work on this file');
@@ -294,6 +311,7 @@ export function validate(text, opts = {}) {
     maxMm3PerMm: r2(maxMm3PerMm),
     maxFlowMm3s: r2(maxFlow),
     maxFeedMmMin: maxFeed,
+    endMarkers: endMarkers.found.map((m) => m.token),
   };
 
   if (original) {
@@ -346,6 +364,57 @@ export function validate(text, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// The end sequence
+// ---------------------------------------------------------------------------
+
+/**
+ * Shutdown markers, across the dialects this parser can read. `group` is what
+ * the marker achieves, so a file can satisfy "turn the hotend off" in whatever
+ * wording its own firmware uses.
+ *
+ * This list is only ever used to RECOGNISE markers. Which ones a given file
+ * must have is decided by the file it was derived from (see §8), never by this
+ * list -- that is what lets another printer's end sequence be just as binding
+ * as this one's without anybody writing it down here.
+ */
+const END_MARKERS = [
+  { token: ';PRINT_END', group: 'marker', what: 'the end-of-print marker' },
+  { token: '; EXECUTABLE_BLOCK_END', group: 'marker', what: 'the end of the executable block' },
+  { token: ';End of Gcode', group: 'marker', what: 'the end-of-print marker' },
+  { token: 'M104 S0', group: 'hotend', what: 'turning the hotend off' },
+  { token: 'M109 S0', group: 'hotend', what: 'turning the hotend off' },
+  { token: 'TURN_OFF_HEATERS', group: 'hotend', what: 'turning the heaters off' },
+  { token: 'M140 S0', group: 'bed', what: 'turning the bed off' },
+  { token: 'M190 S0', group: 'bed', what: 'turning the bed off' },
+  { token: 'M84', group: 'steppers', what: 'disabling the steppers' },
+  { token: 'M18', group: 'steppers', what: 'disabling the steppers' },
+];
+
+const GROUP_WHAT = {
+  hotend: 'turning the hotend off',
+  bed: 'turning the bed off',
+  steppers: 'disabling the steppers',
+};
+
+/**
+ * The end of the file's EXECUTABLE part -- what the printer actually runs.
+ *
+ * The CONFIG_BLOCK is not it, and it quotes `machine_end_gcode` verbatim: a file
+ * whose real end sequence had been deleted still had every marker sitting in its
+ * own settings dump, so the check passed on a file that would never turn the
+ * hotend off. Everything from `; CONFIG_BLOCK_START` on is cut before looking.
+ */
+function executableTail(text) {
+  const at = text.lastIndexOf('; CONFIG_BLOCK_START');
+  return (at > 0 ? text.slice(0, at) : text).slice(-200000);
+}
+
+/** The shutdown markers present in a chunk of text (the tail of a file). */
+function markersIn(text) {
+  return END_MARKERS.filter((m) => text.includes(m.token));
+}
+
+// ---------------------------------------------------------------------------
 
 function limitsFor(config = {}) {
   const L = { ...DEFAULT_LIMITS };
@@ -365,7 +434,14 @@ function limitsFor(config = {}) {
   if (Number.isFinite(hi) && hi > 0) L.nozzleMax = Math.max(hi, 250);
   const v = Number(config.filament_max_volumetric_speed);
   if (Number.isFinite(v) && v > 0) L.maxVolumetric = v;
-  const sx = String(config.machine_max_speed_x || '').split(',').map(Number).filter(Number.isFinite);
+  // `''.split(',')` is `['']` and `Number('')` is 0, which is finite -- so a file
+  // with no machine_max_speed_x used to end up with a maximum feedrate of ZERO
+  // and every single move in it failed BAD_FEEDRATE (B14). Only real numbers
+  // above zero count, and if none are left the default stands.
+  const sx = String(config.machine_max_speed_x || '')
+    .split(',')
+    .map((s) => Number(s.trim()))
+    .filter((nn) => Number.isFinite(nn) && nn > 0);
   if (sx.length) L.maxFeedMmMin = Math.max(...sx) * 60;
   return L;
 }
