@@ -1,0 +1,25 @@
+{
+  "name": "gcode-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "3D G-code viewer, region editor and re-slice loop for the Elegoo Neptune 4 Max",
+  "scripts": {
+    "start": "node scripts/dev.js --built",
+    "dev": "node scripts/dev.js",
+    "api": "node server/index.js",
+    "build": "vite build",
+    "test": "node --test test/*.js",
+    "check": "node test/integration-check.js && node test/check-real-file.js && node test/check-arcs.js && node test/check-area-select.js && node test/check-compare.js && node test/check-compare-render.js && node test/check-align.js && node test/check-printcheck.js"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0",
+    "three": "^0.180.0",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0"
+  }
+}

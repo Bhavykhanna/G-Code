@@ -1,0 +1,46 @@
+# dependencies
+node_modules/
+
+# build output (rebuild with: npm run build)
+dist/
+
+# the app's own browser profile (482 MB) and runtime state
+.app-profile/
+.server.log
+
+# secret: per-start API token for the local server
+.gcs-token
+
+# bridge = live hand-over between the app and Claude, not source
+bridge/
+
+# local snapshots of the source tree before risky changes
+backup/
+
+# ---------------------------------------------------------------------------
+# THE PRIVATE HALF. Everything that names a job, a customer, a model or the
+# machine's folders lives in context-local\ and is never published. Anything
+# new of that kind goes in there too -- one rule, nothing to remember.
+# The public half (context\) carries the same knowledge, written generically.
+# ---------------------------------------------------------------------------
+context-local/
+
+# the real print-file paths the checks run against (test/fixtures.js reads it)
+test/fixtures.local.js
+
+# no model content in this repo (user, 2026-09-19): these are renders of a
+# customer part, and the repo is public
+scripts/shots/
+
+# belt and braces: print/model files never belong here, wherever they appear
+*.gcode
+*.stl
+*.3mf
+*.obj
+*.step
+*.exe
+
+# ...except the demo job, which IS meant to ship (user, 2026-09-19: "add the
+# iphone one in repo as a demmo or a intial point for pep")
+!demo/**/*.gcode
+!demo/**/*.stl

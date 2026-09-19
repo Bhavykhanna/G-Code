@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark light" />
+<title>G-code Studio</title>
+
+<!-- Inline favicon: the app mark, so a chromeless Edge --app window has an icon
+     without an extra request. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%235b7cfa' d='M2 11.5 8 8.2l6 3.3-6 3.3zM2 4.5 8 1.2l6 3.3-6 3.3zM2 6.2l5.3 2.9v4.3L2 10.5zm12 0v4.3l-5.3 2.9V9.1z'/%3E%3C/svg%3E" />
+
+<link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+
+<!-- The entire shell is built by src/ui/layout.js. This root stays empty so
+     there is exactly one place that owns the DOM. -->
+<div id="app" class="app"></div>
+
+<script type="module">
+  /* ------------------------------------------------------------------------
+     Boot.
+
+     Normally `src/main.js` owns startup: it imports createUI(), the parser,
+     the renderer and the server client, and wires them together.
+
+     Two things happen here and nowhere else:
+       - `?mock=1` forces the UI-only dev harness, so the shell can be worked
+         on without a renderer or a server running.
+       - if `src/main.js` is missing or throws on import, we fall back to that
+         same harness instead of showing a blank page.
+
+     The import specifier is assembled at runtime so Vite does not try to
+     resolve it at build time while main.js does not exist yet.
+     --------------------------------------------------------------------- */
+  const root = document.getElementById('app');
+  const wantMock = new URLSearchParams(location.search).has('mock');
+
+  async function bootMock(reason) {
+    const { createUI, mountMockHarness } = await import('/src/ui/layout.js');
+    const ui = createUI(root);
+    mountMockHarness(ui, reason);
+  }
+
+  if (wantMock) {
+    bootMock(null);
+  } else {
+    // A literal specifier, so Vite follows it and pulls main.js -- and with it
+    // the renderer and three.js -- into the production build. Assembling this
+    // string at runtime hid the whole dependency graph from the bundler and
+    // shipped a dist/ with no 3D in it.
+    import('./src/main.js').catch((err) => {
+      // Falling back silently is how we spent an afternoon judging the mock
+      // harness and thinking it was the real app. If the real app cannot start,
+      // say so on screen, loudly, with the actual error.
+      console.error('[gcode-studio] src/main.js failed to load', err);
+      // Report it to the server too. Without this the only copy of the reason
+      // is in a console nobody is looking at, which is how the mock harness got
+      // mistaken for the real app for an afternoon.
+      try {
+        fetch('/api/bridge/request', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            // the API refuses calls without the per-start token (BUGS B9)
+            'X-GCS-Token': (document.querySelector('meta[name="gcs-token"]') || {}).content || '',
+          },
+          body: JSON.stringify({
+            kind: 'startup-error',
+            at: new Date().toISOString(),
+            message: String(err && err.message || err),
+            stack: String(err && err.stack || ''),
+            ua: navigator.userAgent,
+          }),
+        }).catch(() => {});
+      } catch { /* nothing else to try */ }
+      bootMock('src/main.js failed to load - this is the UI mock harness.');
+      const bar = document.createElement('div');
+      bar.style.cssText =
+        'position:fixed;left:0;right:0;top:0;z-index:99999;padding:10px 14px;' +
+        'background:#7f1d1d;color:#fff;font:12px ui-monospace,Consolas,monospace;' +
+        'white-space:pre-wrap;box-shadow:0 2px 12px rgba(0,0,0,.5)';
+      bar.textContent =
+        'THIS IS THE MOCK HARNESS - the real app failed to start.\n' +
+        (err && (err.stack || err.message) ? String(err.stack || err.message) : String(err));
+      document.body.appendChild(bar);
+    });
+  }
+</script>
+
+</body>
+</html>

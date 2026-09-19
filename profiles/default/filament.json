@@ -1,0 +1,135 @@
+{
+    "activate_air_filtration": [
+        "0"
+    ],
+    "additional_cooling_fan_speed": [
+        "0"
+    ],
+    "close_fan_the_first_x_layers": [
+        "12"
+    ],
+    "complete_print_exhaust_fan_speed": [
+        "80"
+    ],
+    "cool_plate_temp": [
+        "35"
+    ],
+    "cool_plate_temp_initial_layer": [
+        "35"
+    ],
+    "during_print_exhaust_fan_speed": [
+        "60"
+    ],
+    "eng_plate_temp": [
+        "0"
+    ],
+    "eng_plate_temp_initial_layer": [
+        "0"
+    ],
+    "fan_cooling_layer_time": [
+        "20"
+    ],
+    "fan_max_speed": [
+        "50"
+    ],
+    "fan_min_speed": [
+        "15"
+    ],
+    "filament_cost": [
+        "0"
+    ],
+    "filament_density": [
+        "1.25"
+    ],
+    "filament_diameter": [
+        "1.75"
+    ],
+    "filament_end_gcode": [
+        " "
+    ],
+    "filament_flow_ratio": [
+        "1.02"
+    ],
+    "filament_is_support": [
+        "0"
+    ],
+    "filament_max_volumetric_speed": [
+        "20"
+    ],
+    "filament_minimal_purge_on_wipe_tower": [
+        "15"
+    ],
+    "filament_settings_id": [
+        "Elegoo PLA+ @EN4 Series"
+    ],
+    "filament_soluble": [
+        "0"
+    ],
+    "filament_start_gcode": [
+        " "
+    ],
+    "filament_type": [
+        "PLA"
+    ],
+    "filament_vendor": [
+        "Elegoo"
+    ],
+    "full_fan_speed_layer": [
+        "22"
+    ],
+    "hot_plate_temp": [
+        "60"
+    ],
+    "hot_plate_temp_initial_layer": [
+        "60"
+    ],
+    "nozzle_temperature": [
+        "225"
+    ],
+    "nozzle_temperature_initial_layer": [
+        "225"
+    ],
+    "nozzle_temperature_range_high": [
+        "240"
+    ],
+    "nozzle_temperature_range_low": [
+        "190"
+    ],
+    "overhang_fan_speed": [
+        "70"
+    ],
+    "overhang_fan_threshold": [
+        "25%"
+    ],
+    "reduce_fan_stop_start_freq": [
+        "1"
+    ],
+    "required_nozzle_HRC": [
+        "0"
+    ],
+    "slow_down_for_layer_cooling": [
+        "1"
+    ],
+    "slow_down_layer_time": [
+        "8"
+    ],
+    "slow_down_min_speed": [
+        "10"
+    ],
+    "temperature_vitrification": [
+        "45"
+    ],
+    "textured_plate_temp": [
+        "60"
+    ],
+    "textured_plate_temp_initial_layer": [
+        "60"
+    ],
+    "type": "filament",
+    "name": "EN4Max 0.4 default PLA+",
+    "from": "system",
+    "instantiation": "true",
+    "compatible_printers": [
+        "Elegoo Neptune 4 Max 0.4 nozzle"
+    ]
+}
