@@ -18,9 +18,9 @@ import * as THREE from 'three';
 import { parseGcode } from '../src/parser/parse.js';
 import { countLayers, buildExtrudeArrays } from '../src/render/geometry.js';
 import { selectInRect, viewProjection, normRect } from '../src/render/area.js';
+import { demoFile } from './fixtures.js';
 
-const file = argv[2] ||
-  '../phonecase-17pro/old/EN4Max_0.4_Iphone17Pro_HexCover_HSPLA+_0.20_v1-ironed_49m.gcode';
+const file = argv[2] || demoFile;
 
 let fails = 0;
 const ok = (name, cond, detail = '') => {

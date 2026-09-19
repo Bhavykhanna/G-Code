@@ -14,10 +14,22 @@ import { readdir, rm, readFile, stat } from 'node:fs/promises';
 import WebSocket from 'ws';
 import { start, stop, getToken, tokenFile } from '../server/index.js';
 import { ARCHIVE_ROOT, PROJECT_ROOT } from '../server/api/files.js';
+import { BRIDGE_DIR } from '../server/api/bridge.js';
 import { ok, eq, section, row, run, PORT, BASE, get, post, auth } from './server-helpers.js';
 
 const ATTACH_TEST_DIR = path.join(PROJECT_ROOT, 'bridge', `attached-test-${process.pid}`);
 process.env.GCS_ATTACH_DIR = ATTACH_TEST_DIR;
+
+// The server only honours GCS_ATTACH_DIR while it points INSIDE the Archive --
+// otherwise an attachment would land somewhere it could never be named from.
+// When the app is not itself inside the archive (a clone pointed at demo\),
+// that is the case, and attachments go to the isolated bridge folder instead.
+// The test follows the same rule rather than assuming one layout.
+const insideArchive = (() => {
+  const rel = path.relative(ARCHIVE_ROOT, ATTACH_TEST_DIR);
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+})();
+const ATTACH_DIR_USED = insideArchive ? ATTACH_TEST_DIR : path.join(BRIDGE_DIR, 'attached');
 process.env.GCS_TERM_CMD = JSON.stringify(['cmd.exe', '/d', '/c', 'echo hello-pty']);
 
 /** Raw request, so Host and Origin can be set freely. */
@@ -132,10 +144,14 @@ await run(async () => {
     });
     eq(a.__status, 200, 'attach with png -> 200');
     ok(a.ok === true && a.id === 'sel-1789-test', 'answers ok + id');
-    const relDir = path.relative(ARCHIVE_ROOT, ATTACH_TEST_DIR).split(path.sep).join('/');
+    const relDir = path.relative(ARCHIVE_ROOT, ATTACH_DIR_USED).split(path.sep).join('/');
     eq(a.json, `${relDir}/sel-1789-test.json`, 'json path is Archive-relative with /');
     eq(a.png, `${relDir}/sel-1789-test.png`, 'png path is Archive-relative with /');
-    ok(a.json.startsWith('gcode-studio/bridge/'), 'paths start at gcode-studio/');
+    ok(!/[\\]/.test(a.json), 'forward slashes only, whatever the OS uses');
+    // What the path has to be good for: Claude runs in the Archive root and
+    // opens it exactly as written.
+    eq(path.resolve(ARCHIVE_ROOT, a.json), path.join(ATTACH_DIR_USED, 'sel-1789-test.json'),
+      'and it resolves from the Archive root to the file that was written');
     const back = JSON.parse(await readFile(path.join(ARCHIVE_ROOT, a.json), 'utf8'));
     eq(back.hello, 'world', 'json file holds data');
     const pngBack = await readFile(path.join(ARCHIVE_ROOT, a.png));
@@ -144,7 +160,7 @@ await run(async () => {
     const a2 = await post('/api/bridge/attach', { kind: 'move', id: 'sel-1789-test', data: { again: true } });
     eq(a2.png, null, 're-attach without png -> png: null');
     let gone = false;
-    try { await stat(path.join(ATTACH_TEST_DIR, 'sel-1789-test.png')); } catch { gone = true; }
+    try { await stat(path.join(ATTACH_DIR_USED, 'sel-1789-test.png')); } catch { gone = true; }
     ok(gone, 'and the stale png is removed');
 
     for (const [label, body, want] of [
@@ -170,13 +186,13 @@ await run(async () => {
       await post('/api/bridge/attach', { kind: 'selection', id: `sel-p${String(i).padStart(2, '0')}`, data: { i } });
       await sleep(3);
     }
-    const left = (await readdir(ATTACH_TEST_DIR)).filter((f) => f.endsWith('.json'));
+    const left = (await readdir(ATTACH_DIR_USED)).filter((f) => f.endsWith('.json'));
     eq(left.length, 40, 'keeps the newest 40 ids');
     ok(!left.includes('sel-1789-test.json') && !left.includes('sel-p00.json') && !left.includes('sel-p01.json'), 'the oldest ones are deleted');
     ok(left.includes('sel-p41.json') && left.includes('sel-p02.json'), 'the newest ones are kept');
-    ok(!(await readdir(ATTACH_TEST_DIR)).some((f) => f.includes('.tmp-')), 'no temp files left behind');
+    ok(!(await readdir(ATTACH_DIR_USED)).some((f) => f.includes('.tmp-')), 'no temp files left behind');
   } finally {
-    await rm(ATTACH_TEST_DIR, { recursive: true, force: true });
+    if (insideArchive) await rm(ATTACH_TEST_DIR, { recursive: true, force: true });
   }
 
   section('WebSocket /api/term: access');
