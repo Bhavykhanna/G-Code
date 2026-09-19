@@ -93,6 +93,51 @@ console.log('\n=== printcheck: synthetic ===');
 
 console.log('\n=== screw seats ===');
 {
+  /**
+   * A hole through a floor, drawn as a regular n-gon per layer: `pocketTo` layers
+   * of radius `pocketR`, then shaft layers of radius `shaftR`.
+   * n = 20 is a circle as a slicer draws one (rMax/rMin 1.012); n = 6 is a hexagon
+   * cut-out (1.155), which is not a screw hole however wide its first layers are.
+   */
+  const hole = ({ n = 20, pocketR = 3.15, shaftR = 1.75, pocketTo = 12, layers = 18 }) => {
+    const L = ['M83'];
+    for (let layer = 1; layer <= layers; layer++) {
+      const z = (0.2 * layer).toFixed(2);
+      const r = layer <= pocketTo ? pocketR : shaftR;
+      const pt = (k) => [50 + r * Math.cos((2 * Math.PI * k) / n), 50 + r * Math.sin((2 * Math.PI * k) / n)];
+      const [sx, sy] = pt(0);
+      L.push(`;LAYER:${layer}`, `;Z:${z}`, ';TYPE:Inner wall', ';WIDTH:0.45', ';HEIGHT:0.2',
+        `G1 X${sx.toFixed(3)} Y${sy.toFixed(3)} Z${z} F6000`, 'G1 E0.6 F3600');
+      for (let k = 1; k <= n; k++) {
+        const [x, y] = pt(k);
+        L.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} E0.05 F1800`);
+      }
+      L.push('G1 E-0.6 F3600');
+    }
+    return parseGcode(L.join(NL));
+  };
+
+  // the measured case: pocket r 3.15 up to Z 2.4, shaft r 1.75 -- 1.2 mm of seat
+  const thin = checkScrewSeats(hole({}));
+  ok('round hole with a head pocket is found', thin.holes.length === 1 && thin.holes[0].pocket,
+    JSON.stringify(thin.holes));
+  ok('1.2 mm seat -> HIGH', thin.findings.length === 1 && thin.findings[0].level === 'HIGH',
+    thin.findings.map((f) => f.text).join(' | '));
+
+  const thick = checkScrewSeats(hole({ layers: 23 }));   // 2.2 mm of seat
+  ok('2.2 mm seat -> no finding', thick.findings.length === 0 && thick.holes.length === 1,
+    JSON.stringify(thick.holes));
+
+  // 2026-09-19: hexagon cut-outs of a phone case were reported as screw holes -- the
+  // radius was read at the ends of the moves only, where every point is a corner
+  const hex = checkScrewSeats(hole({ n: 6, pocketR: 5.94, shaftR: 5.28, pocketTo: 2, layers: 8 }));
+  ok('a hexagon cut-out is not a screw hole', hex.holes.length === 0 && hex.findings.length === 0,
+    JSON.stringify(hex.holes));
+  // ...and a round hole whose first layers are only elephant-foot-wider has no pocket
+  const foot = checkScrewSeats(hole({ pocketR: 1.95, shaftR: 1.75, pocketTo: 2, layers: 12 }));
+  ok('first-layer widening is not a head pocket',
+    foot.holes.length === 1 && !foot.holes[0].pocket && foot.findings.length === 0, JSON.stringify(foot.holes));
+
   const base = fx ? arc(fx.jobRel) : null;
   const cases = fx ? fx.screwSeats.map(([f, want, name]) => [base + f, want, name]) : [];
   if (!cases.length) console.log('  skip  no test/fixtures.local.js');
