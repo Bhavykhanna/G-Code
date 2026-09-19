@@ -137,12 +137,17 @@ await run(async () => {
   }
 
   section('path traversal guard');
+  // Climb out of the job folder AND out of the Archive root. A job path is one or two
+  // levels deep (a model folder can hold version folders), so the number of `..` is
+  // computed: with too few, the path stays inside the root and the honest answer is a
+  // 404, not the 403 this section is about.
+  const out = '../'.repeat(job.path.split('/').length + 1);
   for (const bad of [
     '../../../Windows/win.ini',
     '..\\..\\..\\Windows\\win.ini',
     'C:/Windows/win.ini',
-    job.path + '/../../CONTEXT-3D-PRINTING.md',
-    job.path + '/../../../etc/passwd',
+    job.path + '/' + out + 'Windows/win.ini',
+    job.path + '/' + out + 'etc/passwd',
   ]) {
     const st = await code('/api/file?path=' + encodeURIComponent(bad));
     ok(st === 403, `403 for ${bad}  (got ${st})`);

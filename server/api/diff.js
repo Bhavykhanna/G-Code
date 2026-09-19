@@ -148,10 +148,12 @@ function layerDiff(pa, pb, opts = {}) {
       zB: b ? round(b.z) : null,
       timeA: a ? round(a.time) : null,
       timeB: b ? round(b.time) : null,
-      dTime: a && b ? round(b.time - a.time) : null,
+      // deltas are the difference of the ROUNDED values, not the rounded
+      // difference, so a displayed row adds up exactly (they differ by 0.01)
+      dTime: a && b ? round(round(b.time) - round(a.time)) : null,
       filamentA: a ? round(a.filamentMm) : null,
       filamentB: b ? round(b.filamentMm) : null,
-      dFilament: a && b ? round(b.filamentMm - a.filamentMm) : null,
+      dFilament: a && b ? round(round(b.filamentMm) - round(a.filamentMm)) : null,
       lengthA: a ? round(a.extrudeMm) : null,
       lengthB: b ? round(b.extrudeMm) : null,
       maxFanA: a ? round(a.maxFan * 100) : null,
@@ -211,10 +213,11 @@ function featureDiff(pa, pb) {
       name,
       timeA: a ? round(a.time) : 0,
       timeB: b ? round(b.time) : 0,
-      dTime: round((b?.time || 0) - (a?.time || 0)),
+      // as in the layer rows: difference of the rounded values, so it adds up
+      dTime: round(round(b?.time || 0) - round(a?.time || 0)),
       lengthA: a ? round(a.lengthMm) : 0,
       lengthB: b ? round(b.lengthMm) : 0,
-      dLength: round((b?.lengthMm || 0) - (a?.lengthMm || 0)),
+      dLength: round(round(b?.lengthMm || 0) - round(a?.lengthMm || 0)),
       filamentA: a ? round(a.filamentMm) : 0,
       filamentB: b ? round(b.filamentMm) : 0,
       movesA: a ? a.moves : 0,
