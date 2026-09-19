@@ -8,11 +8,19 @@ even do git add with out permission"). Reading state (`status`, `log`, `ls-remot
 
 ## Where the repo is
 
-Repo root is **`Archive\gcode-studio\`**, not the Archive root. Remote (since 2026-09-19):
-`https://github.com/bhavy-wilyer/G-Code.git`, the account this PC is already logged in to
-(`bhavy`), so pushing needs no extra login and no stored token. **First commit pushed 2026-09-19**
-(`e603ebf`, 123 files, ~13 MB): the app, the context and memory files, the default profile and the
-demo job.
+Repo root is **`Archive\gcode-studio\`**, not the Archive root. Remote:
+**`https://github.com/Bhavykhanna/G-Code.git`** (2026-09-19; it was `bhavy-wilyer/G-Code` earlier the
+same day, and before that a repo on a different account). The account this PC is logged in to, so
+pushing needs no extra login and no stored token.
+
+History so far, both on 2026-09-19: `e603ebf`, the first push — which also carried the memory files
+and the open errands, so it was taken down; and `59ef450`, the re-upload, which is where the
+public/private split (`context\` vs the git-ignored `context-local\`) comes from.
+
+**The first clone of `59ef450` would not build**: `.gitignore` had `bridge/` unanchored, so
+`src\bridge\` — the app's whole server client — was never committed. The pattern is now `/bridge/`.
+When a folder in the app shares a name with something that should be ignored, **anchor the pattern**;
+`git status --ignored src\` is the way to see what a pattern is really eating.
 
 | Option that was rejected | Why |
 |---|---|

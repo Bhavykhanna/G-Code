@@ -53,6 +53,19 @@ jobs live. **Every** client-supplied path — `/api/file`, `/api/meta`, `/api/di
 | `path.resolve` + lexical containment | `..\..\..\Windows\win.ini`, `C:\Windows\win.ini` |
 | `realpath` + containment again | a symlink or junction inside the Archive pointing out of it |
 
+**Where that root is** (`files.js:resolveArchiveRoot`, 2026-09-19). The folder above the app is the
+default, not a law — it is right only while the app sits in `<archive>\gcode-studio\`. A clone
+anywhere else would make the drive root the sandbox: no jobs found (they would be three levels
+down) and a recursive `fs.watch` over everything on that drive. So, in order:
+
+| # | Source | For |
+|---|---|---|
+| 1 | `GCS_ARCHIVE` | one run, or a launcher that sets it |
+| 2 | `.gcs-archive` next to the app — one line, the path, relative to the app or absolute | a machine that keeps its jobs somewhere else. Git-ignored, so it changes nothing for anyone else |
+| 3 | the folder above the app | the normal case, unchanged |
+
+A clone with no print archive points it at `demo`, and the shipped job is a real job to open.
+
 A path may be given Archive-relative (`phonecase-17pro/x.gcode`, what the UI uses) or absolute
 inside the Archive. `/` and `\` both work. Anything else is **403**, not 404 — the distinction is
 deliberate so a traversal attempt is visible in the log rather than looking like a typo.
@@ -380,7 +393,7 @@ to 426 × 426 / Z 480 / 170–300 °C / bed 0–110 / 500 mm/s / 20 mm³/s.
 | `BED_TEMP` | `M140`/`M190` outside 0–110 |
 | `BAD_FEEDRATE` | `F` ≤ 0 or above the machine limit |
 | `DANGLING_FEATURE` | a `;TYPE:` block with no extrusion — **error only if the count increased** vs the source file, warning otherwise |
-| `END_SEQUENCE` | `;PRINT_END`, `M104 S0`, `M140 S0`, `M84` or `; EXECUTABLE_BLOCK_END` missing from the tail |
+| `END_SEQUENCE` | a shutdown marker the **source file** had is missing after the edit; standalone, the file does not turn the hotend or the steppers off at all (see below) |
 | `FILAMENT_IMPLAUSIBLE` | total filament changed >30 % — that is a re-slice, not an edit |
 | `RETRACT_UNBALANCED` | retract/prime **move counts** differ from the source file |
 | `FLOW_CAP` | any move's E scaled outside 0.80–1.20× vs the source file — an independent second line of defence behind the op-level cap |
@@ -401,9 +414,20 @@ approximate so this is a hint), `PRIME_EXCESS`, `NO_CONFIG_BLOCK`, `FILAMENT_CHA
   print body.
 - **Differential checks need `original`.** Run standalone (e.g. on a slice result) the validator
   still does every envelope, geometry and state check, but cannot compare counts or flow ratios.
+- **The end sequence is the file's own, not this printer's** (2026-09-19, B15). An edit must keep every
+  shutdown marker that was in the source file's executable tail — pass `originalText` as well as
+  `original` for that, which `edit.js` does. It is exactly as strict for this machine (its five markers
+  are all there, so all five are required) and correct for a file from any other. Standalone, with no
+  source to compare against, the file only has to turn the heaters and the steppers off, in any dialect
+  `END_MARKERS` knows (`M104 S0` / `M109 S0` / `TURN_OFF_HEATERS`, `M84` / `M18`, …); no bed-off is a
+  warning. `stats.endMarkers` lists what was found.
+  **The tail is cut at `; CONFIG_BLOCK_START` first** — the settings dump quotes `machine_end_gcode`
+  verbatim, so before that a file whose real ending had been deleted still passed.
+  Pinned by `test/check-validate.js` (in `npm run check`): synthetic files in two dialects, every
+  marker dropped one at a time, the gutted-but-quoted file, and the feedrate fallback.
 
 `stats` carries `moves, extrudeMoves, layers, depositedMm, depositedG, maxZ, minZ, bbox, retracts,
-primes, retractStateRange, maxMm3PerMm, maxFlowMm3s, maxFeedMmMin`, plus `original`,
+primes, retractStateRange, maxMm3PerMm, maxFlowMm3s, maxFeedMmMin, endMarkers`, plus `original`,
 `filamentDeltaPct` and `worstFlowRatio` in differential mode. Show these; they are the numbers that
 explain a rejection.
 
