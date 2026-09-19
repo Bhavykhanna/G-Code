@@ -42,6 +42,7 @@ the start instead of the ~72 KB that used to be pulled in. Do not re-read these 
 | [`findings.md`](findings.md) | what has been measured and learned — the numbers to trust and the mistakes not to repeat |
 | [`how-we-work.md`](how-we-work.md) | before designing something new, or when a fix has needed three patches |
 | [`printer.md`](printer.md) | anything about the machine: bed size, filament, the pen drive, the slicer install, the printer-screen preview |
+| [`other-printers.md`](other-printers.md) | before assuming a part is machine-specific, or when a file from another printer or slicer is opened: what follows the file, what needs this profile's annotations, and what refuses outright |
 | [`profiles.md`](profiles.md) | the tuning history: the first settings, the second round, and the corner-lift post-mortem |
 | [`slicing.md`](slicing.md) | running the ElegooSlicer CLI by hand: the exact command, and the exit codes that bite |
 | a job's own `README.md` (and its `CONTEXT-chat.md`) | **before touching that job's files.** Its folder's `CLAUDE.md` loads it as soon as you work there |
@@ -91,6 +92,7 @@ Archive\                         the print archive (not in git)
       preferences.md             always loaded (how to work)
       versions.md                before building or finalizing a print file
       profiles.md  printer.md  slicing.md  findings.md  how-we-work.md
+      other-printers.md        what is machine-specific and what is not
     context-local\               PRIVATE, git-ignored
       README.md                  what is in here, and the generic-to-real name key
       memory\                    read every file at the start of a session

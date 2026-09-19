@@ -865,7 +865,9 @@ export async function handleEdit(body) {
 
   const finalText = doc.render();
   const finalParsed = parseGcode(finalText);
-  const validation = validate(finalText, { parsed: finalParsed, original: src.parsed, ops });
+  const validation = validate(finalText, {
+    parsed: finalParsed, original: src.parsed, originalText: src.text, ops,
+  });
 
   const before = summarise(src.parsed);
   const after = summarise(finalParsed, predictedSec);

@@ -333,9 +333,51 @@ export const SEAT_DEFAULTS = {
   minSeat: 1.5,        // mm of plastic wanted between a head pocket and the top of the shaft hole
   maxHoleR: 6,         // mm, larger round loops are not screw holes
   pocketStep: 0.6,     // mm, a pocket is at least this much wider (radius) than the shaft
+  pocketRatio: 1.25,   // ...and at least this many times the shaft radius: a head pocket is much
+                       // wider, while first-layer widening is a few per cent
+  maxDev: 0.12,        // radius scatter / mean radius, sampled along the path
+  maxRound: 1.10,      // rMax/rMin: a hexagon is 1.155, a polygonised circle 1.01-1.08
+  sampleStep: 0.3,     // mm between radius samples along a loop
 };
 
 const WALLS = new Set(['Inner wall', 'Outer wall', 'Overhang wall']);
+
+/**
+ * Shape of a closed run of wall moves, measured ALONG the path: centre, mean
+ * radius, the scatter of that radius, and rMin / rMax.
+ * Why the samples (2026-09-19): reading the radius only at the ends of the moves
+ * makes any straight-edged hole look perfectly round -- every end point of a
+ * hexagon is a corner, so they all sit at the same radius (rMax/rMin 1.008), and
+ * the hexagon holes of a phone case were reported as screw holes. Sampled along
+ * the edges a hexagon reads 1.155 and a polygonised circle 1.01-1.08.
+ * @returns {{cx: number, cy: number, r: number, dev: number, rMin: number, rMax: number}|null}
+ */
+function loopShape(s, run, step = 0.3) {
+  let per = 0;
+  for (const i of run) per += Math.hypot(s.x1[i] - s.x0[i], s.y1[i] - s.y0[i]);
+  if (!(per > 0)) return null;
+  const st = Math.max(step, per / 256);          // bounded work per loop
+  const px = [], py = [];
+  for (const i of run) {
+    const dx = s.x1[i] - s.x0[i], dy = s.y1[i] - s.y0[i];
+    const n = Math.max(1, Math.ceil(Math.hypot(dx, dy) / st));
+    for (let k = 0; k < n; k++) { px.push(s.x0[i] + (dx * k) / n); py.push(s.y0[i] + (dy * k) / n); }
+  }
+  const n = px.length;
+  let cx = 0, cy = 0;
+  for (let k = 0; k < n; k++) { cx += px[k]; cy += py[k]; }
+  cx /= n; cy /= n;                              // evenly spaced samples, so this is the outline's centre
+  let sum = 0, sum2 = 0, rMin = 1e9, rMax = 0;
+  for (let k = 0; k < n; k++) {
+    const r = Math.hypot(px[k] - cx, py[k] - cy);
+    sum += r; sum2 += r * r;
+    if (r < rMin) rMin = r;
+    if (r > rMax) rMax = r;
+  }
+  const r = sum / n;
+  if (!(rMin > 0)) return null;
+  return { cx, cy, r, dev: Math.sqrt(Math.max(0, sum2 / n - r * r)), rMin, rMax };
+}
 
 /**
  * Screw holes with a head pocket underneath (measured case: pocket r 3.15 up
@@ -359,18 +401,19 @@ export function checkScrewSeats(parse, opts = {}) {
     if (run.length >= 6) {
       const a = run[0], b = run[run.length - 1];
       if (Math.hypot(s.x0[a] - s.x1[b], s.y0[a] - s.y1[b]) < 0.35) {
-        let cx = 0, cy = 0, x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+        // cheap bounding box first (both ends of every move), so only small,
+        // roughly square loops are worth sampling
+        let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
         for (const i of run) {
-          cx += s.x0[i]; cy += s.y0[i];
-          x0 = Math.min(x0, s.x0[i]); x1 = Math.max(x1, s.x0[i]); y0 = Math.min(y0, s.y0[i]); y1 = Math.max(y1, s.y0[i]);
+          x0 = Math.min(x0, s.x0[i], s.x1[i]); x1 = Math.max(x1, s.x0[i], s.x1[i]);
+          y0 = Math.min(y0, s.y0[i], s.y1[i]); y1 = Math.max(y1, s.y0[i], s.y1[i]);
         }
-        cx /= run.length; cy /= run.length;
         const w = x1 - x0, h = y1 - y0;
-        if (w > 0.5 && h > 0.5 && Math.max(w, h) / Math.min(w, h) < 1.25) {
-          const rs = run.map((i) => Math.hypot(s.x0[i] - cx, s.y0[i] - cy));
-          const r = rs.reduce((p, q) => p + q, 0) / rs.length;
-          const dev = Math.sqrt(rs.reduce((p, q) => p + (q - r) ** 2, 0) / rs.length);
-          if (r <= o.maxHoleR && dev / r < 0.12) loops.push({ L: s.layer[a], z: s.z1[a], cx, cy, r });
+        if (w > 0.5 && h > 0.5 && Math.max(w, h) / Math.min(w, h) < 1.25 && Math.max(w, h) <= 2.4 * o.maxHoleR) {
+          const q = loopShape(s, run, o.sampleStep);
+          if (q && q.r <= o.maxHoleR && q.dev / q.r < o.maxDev && q.rMax / q.rMin < o.maxRound) {
+            loops.push({ L: s.layer[a], z: s.z1[a], cx: q.cx, cy: q.cy, r: q.r });
+          }
         }
       }
     }
@@ -416,7 +459,10 @@ export function checkScrewSeats(parse, opts = {}) {
     const rows = [...g.byL].sort((a, b) => a[0] - b[0]).map(([L, v]) => ({ L, ...v }));
     if (rows.length < 4) continue;
     const shaftR = Math.min(...rows.map((q) => q.r));
-    const isPocket = (q) => q.r > shaftR + o.pocketStep;
+    // a head pocket is much wider than the shaft, not a few per cent wider: that keeps
+    // the first layer's elephant-foot widening, and a chamfer at the mouth of a hole,
+    // from reading as a pocket
+    const isPocket = (q) => q.r > shaftR + o.pocketStep && q.r > shaftR * o.pocketRatio;
     // the last pocket layer that has shaft layers above it
     let k = -1;
     for (let j = 0; j < rows.length - 1; j++) if (isPocket(rows[j]) && !isPocket(rows[j + 1])) { k = j; break; }

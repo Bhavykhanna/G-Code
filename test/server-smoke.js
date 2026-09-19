@@ -4,16 +4,51 @@
  *   node test/server-smoke.js
  *
  * Starts the API on a throwaway port, hits every read-only route against the
- * REAL job folders, and checks that nothing outside the Archive tree is
- * reachable. Writes nothing except bridge\chat.jsonl and bridge\selection.json.
+ * REAL job folders under the Archive root, and checks that nothing outside that
+ * tree is reachable. Writes nothing except bridge\chat.jsonl and
+ * bridge\selection.json.
+ *
+ * Nothing here is pinned to one private print. The subject file is whatever
+ * job the server actually finds -- on a clone with no archive that is the demo
+ * job, on the archive machine it is the first real job -- and every figure it
+ * is measured against comes from the same file on disk, read and parsed by the
+ * test itself. The archive-only history checks are gated behind `fx` and
+ * skipped (loudly) when test/fixtures.local.js is not there.
  */
 import './_isolate.js'; // must be first: keeps the tests out of the live bridge\ folder
+import { readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
 import { start, stop } from '../server/index.js';
-import { ok, eq, section, row, run, PORT, get, getText, post, code, auth } from './server-helpers.js';
+import { ARCHIVE_ROOT } from '../server/api/files.js';
+import { parseGcode } from '../src/parser/parse.js';
+import { fx } from './fixtures.js';
+import { ok, eq, section, row, run, PORT, BASE, get, getText, post, code, auth } from './server-helpers.js';
 
-// Archived versions never change once they are in old\, so the byte-exact
-// checks below pin to one of those rather than to whatever is current today.
-const F17 = 'phonecase-17pro/old/EN4Max_0.4_Iphone17Pro_HexCover_HSPLA+_0.20_v1-ironed_49m.gcode';
+/**
+ * Read the naming convention straight from the filename, without going through
+ * server/api/version.js -- otherwise the check would only be asking the parser
+ * whether it agrees with itself. Returns null for anything it cannot split,
+ * which is a normal outcome and not a failure.
+ */
+function fieldsFromName(name) {
+  const m = /^(.+)\.gcode$/i.exec(name);
+  if (!m) return null;
+  const parts = m[1].split('_');
+  if (parts.length < 6) return null;
+  // A draft (`..._v3-draft.gcode`) has no time field.
+  const time = /^v\d+-/.test(parts[parts.length - 1]) ? null : parts.pop();
+  const v = /^v(\d+)-(.+)$/.exec(parts.pop());
+  if (!v) return null;
+  const layerHeight = parts.pop();
+  const filament = parts.pop();
+  const printer = parts.shift();
+  const nozzle = parts.shift();
+  if (!parts.length || !/^\d+\.\d+$/.test(layerHeight)) return null;
+  return {
+    printer, nozzle, model: parts.join('_'), filament, layerHeight,
+    version: Number(v[1]), changed: v[2], time,
+  };
+}
 
 await run(async () => {
   await start(PORT, '127.0.0.1');
@@ -24,39 +59,90 @@ await run(async () => {
   row('node', h.node);
   row('archive root', h.archiveRoot);
   row('watching', String(h.watching));
+  eq(h.archiveRoot, ARCHIVE_ROOT, 'health reports the sandbox root the module resolved');
 
   section('/api/jobs');
   const j = await get('/api/jobs');
   const names = j.jobs.map((x) => x.name);
   row('jobs found', names.join(', '));
-  ok(names.includes('phonecase-16pro'), 'finds phonecase-16pro');
-  ok(names.includes('phonecase-17pro'), 'finds phonecase-17pro');
-  const p16 = j.jobs.find((x) => x.name === 'phonecase-16pro');
-  const p17 = j.jobs.find((x) => x.name === 'phonecase-17pro');
-  // New versions get added over time, so check the versioning rules rather
-  // than today's exact numbers: one current file, newer than every archived one,
-  // and the original v1..v3 history still intact.
-  eq(p16.gcode.length, 1, '16 Pro current G-code count');
-  ok(p16.old.length >= 3, `16 Pro archived version count >= 3 (got ${p16.old.length})`);
-  eq(p16.stl.length, 1, '16 Pro STL count');
-  ok(p16.profiles.allPresent, '16 Pro has machine/process/filament');
-  const oldVers = p16.old.map((f) => f.version);
-  ok(p16.gcode[0].version > Math.max(...oldVers),
-    `16 Pro current v${p16.gcode[0].version} is newer than every archived version`);
-  ok([1, 2, 3].every((n) => oldVers.includes(n)), `16 Pro old/ still holds v1,v2,v3 (has ${oldVers.join(',')})`);
-  eq(p17.gcode.length, 1, '17 Pro current G-code count');
-  eq(p17.gcode[0].model, 'Iphone17Pro_HexCover', '17 Pro model parsed from the filename');
-  eq(p17.gcode[0].filament, 'HSPLA+', '17 Pro filament parsed');
-  eq(p17.gcode[0].layerHeight, '0.20', '17 Pro layer height parsed');
-  eq(p17.gcode[0].time, '49m', '17 Pro time parsed');
+  ok(j.jobs.length > 0, `the Archive root holds at least one job (${ARCHIVE_ROOT})`);
+  eq(j.archiveRoot, ARCHIVE_ROOT, '/api/jobs names the same root');
+
+  // The versioning rules, not today's numbers: a job is listed because it has
+  // G-code, old\ is what `archived` means, and the current file is the newest.
+  let conventional = 0;
+  for (const job of j.jobs) {
+    const all = [...job.gcode, ...job.old];
+    ok(all.length > 0, `${job.name}: listed because it has G-code (${job.gcode.length} current, ${job.old.length} archived)`);
+    ok(job.gcode.every((f) => f.archived === false), `${job.name}: files in the job folder are not archived`);
+    ok(job.old.every((f) => f.archived === true), `${job.name}: files in old\\ are archived`);
+    // More than one current file only ever means more than one model or
+    // filament in the folder: two current versions of the SAME thing is the
+    // state the archive rules exist to prevent.
+    const stems = job.gcode.filter((f) => f.convention).map((f) => f.model + '|' + f.filament);
+    eq(new Set(stems).size, stems.length, `${job.name}: no two current files are versions of the same thing`);
+    if (job.gcode.length === 1 && job.old.length) {
+      const cur = job.gcode[0].version;
+      const oldMax = Math.max(...job.old.map((f) => f.version ?? -1));
+      ok(cur > oldMax, `${job.name}: current v${cur} is newer than every archived version (max v${oldMax})`);
+    }
+    ok(!job.current || all.some((f) => f.path === job.current), `${job.name}: current points at a listed file`);
+    for (const f of all) {
+      const want = fieldsFromName(f.name);
+      if (!want || !f.convention) continue; // unversioned exports are allowed to exist
+      conventional++;
+      eq(f.version, want.version, `${f.name}: version`);
+      eq(f.model, want.model, `${f.name}: model`);
+      eq(f.filament, want.filament, `${f.name}: filament`);
+      eq(f.layerHeight, want.layerHeight, `${f.name}: layer height`);
+      eq(f.changed, want.changed, `${f.name}: what changed`);
+      eq(f.time, want.time, `${f.name}: time`);
+    }
+  }
+  ok(conventional > 0, `${conventional} listed file(s) follow the naming convention`);
+
+  // The subject for every file-level check below: the OLDEST archived version of
+  // the first job that has one. Archived files never change once they are in
+  // old\, so what the test reads off disk is what the route must return
+  // tomorrow too.
+  const job = j.jobs.find((x) => x.old.length) || j.jobs[0];
+  const subject = [...job.old].sort((a, b) => (a.version ?? 0) - (b.version ?? 0))[0] || job.gcode[0];
+  const SUBJ = subject.path;
+  const SUBJ_ABS = path.join(ARCHIVE_ROOT, ...SUBJ.split('/'));
+  row('subject', SUBJ);
+  const diskText = await readFile(SUBJ_ABS, 'utf8');
+  const diskSize = (await stat(SUBJ_ABS)).size;
+  const local = parseGcode(diskText);
+  row('on disk', `${diskSize.toLocaleString()} bytes, ${local.count.toLocaleString()} moves`);
+
+  section('archive history (needs test/fixtures.local.js)');
+  if (!fx || !fx.smoke) {
+    console.log('  skip  no test/fixtures.local.js (or no `smoke` in it): the private print archive is not on this machine');
+  } else {
+    const v = await get('/api/versions?job=' + encodeURIComponent(fx.smoke.job));
+    row(fx.smoke.job, `${v.versions.length} versions`);
+    ok(v.versions.length >= fx.smoke.minVersions,
+      `${fx.smoke.job} has at least ${fx.smoke.minVersions} versions (got ${v.versions.length})`);
+    const jf = j.jobs.find((x) => x.name === fx.smoke.job);
+    ok(jf, `/api/jobs finds ${fx.smoke.job}`);
+    if (jf) {
+      eq(jf.gcode.length, 1, `${fx.smoke.job} current G-code count`);
+      eq(jf.stl.length, fx.smoke.stlCount ?? 1, `${fx.smoke.job} STL count`);
+      ok(jf.profiles.allPresent, `${fx.smoke.job} has machine/process/filament`);
+      const oldVers = jf.old.map((f) => f.version);
+      for (const n of fx.smoke.oldVersions || []) {
+        ok(oldVers.includes(n), `${fx.smoke.job} old\\ still holds v${n} (has ${oldVers.join(',')})`);
+      }
+    }
+  }
 
   section('path traversal guard');
   for (const bad of [
     '../../../Windows/win.ini',
     '..\\..\\..\\Windows\\win.ini',
     'C:/Windows/win.ini',
-    'phonecase-17pro/../../CONTEXT-3D-PRINTING.md',
-    'phonecase-17pro/../../../etc/passwd',
+    job.path + '/../../CONTEXT-3D-PRINTING.md',
+    job.path + '/../../../etc/passwd',
   ]) {
     const st = await code('/api/file?path=' + encodeURIComponent(bad));
     ok(st === 403, `403 for ${bad}  (got ${st})`);
@@ -64,46 +150,82 @@ await run(async () => {
   ok(await code('/api/file?path=') === 400, '400 for an empty path');
 
   section('/api/file');
-  const text = await getText('/api/file?path=' + encodeURIComponent(F17));
-  eq(text.length, 2963504, '17 Pro raw bytes');
-  ok(text.startsWith('\n\n; HEADER_BLOCK_START'), 'raw text is byte-for-byte the file');
-  const slice = await getText('/api/file?path=' + encodeURIComponent(F17) + '&from=3&to=5');
+  {
+    const r = await fetch(BASE + '/api/file?path=' + encodeURIComponent(SUBJ), { headers: auth() });
+    const body = await r.text();
+    eq(Number(r.headers.get('content-length')), diskSize, 'Content-Length is the file size on disk');
+    eq(r.headers.get('x-gcode-path'), SUBJ, 'X-Gcode-Path echoes the Archive-relative path');
+    ok(body === diskText, `raw text is byte-for-byte the file (${body.length.toLocaleString()} chars)`);
+  }
+  const slice = await getText('/api/file?path=' + encodeURIComponent(SUBJ) + '&from=3&to=5');
   eq(slice.split('\n').length, 3, 'from/to returns the requested line range');
+  eq(slice, diskText.split('\n').slice(3, 6).join('\n'), 'and it is lines 3..5 of the file itself');
 
   section('/api/meta');
   const t0 = Date.now();
-  const m = await get('/api/meta?path=' + encodeURIComponent(F17));
+  const m = await get('/api/meta?path=' + encodeURIComponent(SUBJ));
   row('first parse', (Date.now() - t0) + ' ms');
-  // 92,648 straight moves + the end-G-code wipe arc (G2), drawn as 16 chords since 2026-09-16
-  eq(m.count, 92664, 'move count');
-  // The machine profile's layer_change_gcode emits `;LAYER:n` for the layer it
-  // is ABOUT to start, so the file carries one extra (empty) trailing marker:
-  // 58 parsed layer records for a 57-layer print. meta.layerCount is the
-  // header's own figure and is the one to show the user.
-  eq(m.layers.length, 58, 'parsed layer records (57 real layers + the trailing marker)');
-  eq(m.meta.layerCount, 57, 'meta.layerCount from the header');
-  eq(m.meta.estimatedTimeText, '49m 15s', 'print time from the footer');
-  eq(m.meta.filamentUsedG, 15.1, 'weight from the footer');
-  eq(Object.keys(m.config).length, 624, 'CONFIG_BLOCK key count');
-  ok(m.relativeE === true, 'M83 relative extrusion');
+  // Everything here is checked against a parse the test did itself, so the
+  // route is measured against the file rather than against a remembered number.
+  eq(m.bytes, diskSize, 'meta.bytes is the size on disk');
+  eq(m.count, local.count, 'move count');
+  eq(m.layers.length, local.layers.length, 'parsed layer records');
+  eq(m.meta.layerCount, local.meta.layerCount, 'meta.layerCount from the header');
+  eq(m.meta.estimatedTimeText, local.meta.estimatedTimeText, 'print time from the footer');
+  eq(m.meta.estimatedTimeSec, local.meta.estimatedTimeSec, 'print time in seconds');
+  eq(m.meta.filamentUsedG, local.meta.filamentUsedG, 'weight from the footer');
+  eq(m.meta.maxZ, local.meta.maxZ, 'max Z');
+  eq(m.meta.eol, local.meta.eol, 'line ending preserved');
+  eq(Object.keys(m.config).length, Object.keys(local.config).length, 'CONFIG_BLOCK key count');
+  ok(Object.keys(local.config).length > 100, `the CONFIG_BLOCK really was read (${Object.keys(local.config).length} keys)`);
+  eq(m.relativeE, local.relativeE, 'extrusion mode');
   ok(m.segments === undefined, '/api/meta omits the typed arrays');
+  // The machine profile's layer_change_gcode emits `;LAYER:n` for the layer it
+  // is ABOUT to start, so a file carries at most one extra (empty) trailing
+  // marker: 58 parsed layer records for a 57-layer print. meta.layerCount is
+  // the header's own figure and is the one to show the user.
+  const extra = m.layers.length - m.meta.layerCount;
+  ok(extra === 0 || extra === 1,
+    `parsed layer records are the header count or one more (${m.layers.length} vs ${m.meta.layerCount})`);
+  if (extra === 1) {
+    const last = local.layers[local.layers.length - 1];
+    ok(!last.moves || last.moves === 0 || last.time === 0, 'and the extra trailing marker is empty');
+  }
   const t1 = Date.now();
-  await get('/api/meta?path=' + encodeURIComponent(F17));
+  await get('/api/meta?path=' + encodeURIComponent(SUBJ));
   row('cached parse', (Date.now() - t1) + ' ms');
 
   section('/api/versions');
-  const v = await get('/api/versions?job=phonecase-16pro');
-  ok(v.versions.length >= 4, `16 Pro has at least 4 versions (got ${v.versions.length})`);
+  const v = await get('/api/versions?job=' + encodeURIComponent(job.path));
+  eq(v.versions.length, job.gcode.length + job.old.length, 'every file in the job is a version');
+  eq(v.current, job.current, 'current matches the job listing');
+  eq(v.versions.filter((x) => !x.archived).length, job.gcode.length, 'exactly the job-folder files are unarchived');
+  let prev = -Infinity;
   for (const x of v.versions) {
-    row(`v${x.version} ${x.archived ? 'old' : 'cur'}`, `${x.footer.timeText}  ${x.footer.filamentG} g  ${x.fields.changed}`);
+    row(`v${x.version} ${x.archived ? 'old' : 'cur'}`, `${x.footer.timeText}  ${x.footer.filamentG} g  ${x.fields ? x.fields.changed : '-'}`);
+    ok(x.version == null || x.version >= prev, `v${x.version} is listed in version order`);
+    if (x.version != null) prev = x.version;
+    const want = fieldsFromName(x.name);
+    if (!want) continue;
     ok(x.convention, `${x.name} follows the convention`);
+    eq(x.version, want.version, `${x.name}: version`);
     ok(x.footer.timeSec > 0, `v${x.version} footer time read`);
+    ok(x.footer.filamentG > 0, `v${x.version} footer weight read`);
+    ok(x.size > 0, `v${x.version} size read`);
   }
+  // The subject was parsed above: the tail read and the full parse must agree.
+  const vs = v.versions.find((x) => x.path === SUBJ);
+  ok(vs, 'the subject file is one of the versions');
+  eq(vs.footer.timeText, local.meta.estimatedTimeText, 'the footer tail read agrees with a full parse');
+  eq(vs.footer.filamentG, local.meta.filamentUsedG, 'and on the weight');
+  eq(vs.footer.layerCount, local.meta.layerCount, 'and on the layer count');
+  ok((await get('/api/versions?job=' + encodeURIComponent(job.path + '/nope'))).error != null,
+    'an unknown job is an error, not an empty list');
 
   section('bridge');
   const sel = {
     id: 'sel-smoke-' + Date.now(),
-    file: F17,
+    file: SUBJ,
     lineRanges: [[97240, 97300]],
     summary: { count: 60, layers: [20, 20], zRange: [4.08, 4.08], features: { 'Outer wall': 60 }, lengthMm: 123.4, timeSec: 2.1 },
   };
@@ -158,7 +280,6 @@ await run(async () => {
   // and the UI must notice without polling.
   const { mkdir, writeFile, rm } = await import('node:fs/promises');
   const pathMod = await import('node:path');
-  const { ARCHIVE_ROOT } = await import('../server/api/files.js');
   const scratch = pathMod.join(ARCHIVE_ROOT, 'gcode-studio-scratch-watch');
   await rm(scratch, { recursive: true, force: true });
   await mkdir(scratch, { recursive: true });
@@ -176,23 +297,36 @@ await run(async () => {
 
   section('app control: highlight and open');
   {
-    const REL17 = 'phonecase-17pro/old/EN4Max_0.4_Iphone17Pro_HexCover_HSPLA+_0.20_v1-ironed_49m.gcode';
-    const h = await post('/api/app/highlight', {
-      path: REL17,
+    const hl = await post('/api/app/highlight', {
+      path: SUBJ,
       regions: [{ x: [200, 190], label: 'gap' }, { y: [184, 186], layers: [3, 1] }],
     });
-    eq(h.__status, 200, 'highlight accepted');
-    eq(JSON.stringify(h.regions[0].x), '[190,200]', 'ranges are put in order');
-    eq(h.regions[1].label, 'area 2', 'a missing label gets a number');
-    eq(JSON.stringify(h.regions[1].layers), '[1,3]', 'layers ordered too');
-    eq(h.path, REL17, 'the file is resolved');
+    eq(hl.__status, 200, 'highlight accepted');
+    eq(JSON.stringify(hl.regions[0].x), '[190,200]', 'ranges are put in order');
+    eq(hl.regions[1].label, 'area 2', 'a missing label gets a number');
+    eq(JSON.stringify(hl.regions[1].layers), '[1,3]', 'layers ordered too');
+    eq(hl.path, SUBJ, 'the file is resolved');
     eq((await post('/api/app/highlight', { regions: [{ label: 'nothing' }] })).__status, 400, 'a box needs x, y or layers');
     eq((await post('/api/app/highlight', { regions: [{ x: [1] }] })).__status, 400, 'x must be [from, to]');
     eq((await post('/api/app/highlight', { regions: [] })).__status, 400, 'empty regions without clear is refused');
     eq((await post('/api/app/highlight', { clear: true })).regions.length, 0, 'clear sends no regions');
-    const op = await post('/api/app/open', { path: REL17, diff: true });
+
+    // `diff: true` means "the version before this one": the highest version of
+    // the same model and filament below it, or null when there is none.
+    const all = [...job.gcode, ...job.old].filter((f) => f.convention);
+    const baseFor = (f) => {
+      const lower = all.filter((x) => x.version < f.version && x.model === f.model && x.filament === f.filament);
+      lower.sort((a, b) => a.version - b.version || (a.archived === b.archived ? 0 : a.archived ? -1 : 1));
+      return lower.length ? lower[lower.length - 1].path : null;
+    };
+    const op = await post('/api/app/open', { path: SUBJ, diff: true });
     eq(op.__status, 200, 'open accepted');
-    eq(op.diff, null, 'v1 has no base to diff against');
+    eq(op.diff, baseFor(subject), `the oldest version has no base to diff against`);
+    if (job.gcode.length === 1 && job.gcode[0].convention) {
+      const cur = job.gcode[0];
+      const opc = await post('/api/app/open', { path: cur.path, diff: true });
+      eq(opc.diff, baseFor(cur), 'the current version diffs against the version below it');
+    }
   }
 
   section('404 / 405');

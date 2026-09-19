@@ -17,6 +17,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { parseGcode, arcGeometry, ARC_TOLERANCE, KIND } from '../src/parser/parse.js';
 import { LineDoc, applyOp, getParam } from '../server/api/edit.js';
+import { demoFile } from './fixtures.js';
 
 let fails = 0;
 const ok = (name, cond, detail = '') => {
@@ -136,8 +137,8 @@ console.log('\n=== edits on arc lines ===');
 
 console.log('\n=== real file ===');
 {
-  const file = '../phonecase-17pro/old/EN4Max_0.4_Iphone17Pro_HexCover_HSPLA+_0.20_v1-ironed_49m.gcode';
-  if (!existsSync(file)) {
+  const file = demoFile;
+  if (!file || !existsSync(file)) {
     console.log('  skip  ' + file + ' not found');
   } else {
     const text = readFileSync(file, 'utf8');

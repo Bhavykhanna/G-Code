@@ -11,8 +11,14 @@ dist/
 # secret: per-start API token for the local server
 .gcs-token
 
-# bridge = live hand-over between the app and Claude, not source
-bridge/
+# bridge = live hand-over between the app and Claude, not source.
+# The leading slash matters: without it this also matched `src\bridge\`, and the
+# first push went out with the app's whole server client missing, so a clone
+# could not build (2026-09-19).
+/bridge/
+
+# where the jobs live on this machine, when they are not one level above the app
+.gcs-archive
 
 # local snapshots of the source tree before risky changes
 backup/
@@ -44,3 +50,11 @@ scripts/shots/
 # iphone one in repo as a demmo or a intial point for pep")
 !demo/**/*.gcode
 !demo/**/*.stl
+
+# scratch folders a test run makes next to the app (cleaned on exit)
+.test-bridge-*
+.test-token-*
+
+# the slicer writes its log to 00000.log in whatever directory it is run from,
+# so a slice started by hand can drop one here
+00000.log

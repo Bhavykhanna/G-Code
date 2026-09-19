@@ -1,0 +1,16 @@
+# Print files are bytes, not text. Git must not touch their line endings.
+#
+# Why (2026-09-19): with the usual Windows `core.autocrlf=true` and no rule here,
+# the demo job's G-code is stored LF in the repo and checked out CRLF -- one
+# extra byte on every one of its 124,722 lines, 3,088,226 bytes in the working
+# tree against 2,963,504 in the commit. Everything still parses, so it looks
+# harmless, until something compares a fresh slice with the committed file: the
+# slicer writes LF and the comparison fails on a machine whose git rewrote the
+# reference. That is exactly what happened to test/server-slice.js, and the
+# byte-identical re-slice -- the claim the whole re-slice lane rests on -- looked
+# broken when it was not.
+#
+# A checkout of a print file must be the file that was committed.
+*.gcode -text
+*.stl   -text
+*.3mf   -text

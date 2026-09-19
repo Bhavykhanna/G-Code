@@ -8,8 +8,9 @@
 import { readFileSync } from 'node:fs';
 import { argv } from 'node:process';
 import { parseGcode, KIND, FEATURE_NAMES, formatDuration, segLength } from '../src/parser/parse.js';
+import { demoFile } from './fixtures.js';
 
-const file = argv[2] || '../phonecase-17pro/old/EN4Max_0.4_Iphone17Pro_HexCover_HSPLA+_0.20_v1-ironed_49m.gcode';
+const file = argv[2] || demoFile;
 
 const text = readFileSync(file, 'utf8');
 const t0 = performance.now();

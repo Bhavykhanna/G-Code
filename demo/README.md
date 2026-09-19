@@ -15,7 +15,8 @@ Nothing here needs the printer: load a file and the viewer, selection, print che
 
 1. Open the `v2-thumbnail` file from the title bar.
 2. **Diff** (`D`) → it lines up against `old\…_v1-ironed…`: green is new, red is gone, grey unchanged.
-3. **Check** (`K`) → the print check draws what it finds on the model (this file is clean, 0–1 HIGH).
+3. **Check** (`K`) → the print check draws what it finds on the model (this file is clean: **0 HIGH**,
+   1 MEDIUM — three unlifted travels across fresh top surface).
 4. **Select** → *Area* (`G`), drag over the top surface, and the panel shows that region's moves,
    plastic and time per feature.
 

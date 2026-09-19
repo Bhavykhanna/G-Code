@@ -10,7 +10,7 @@
     "api": "node server/index.js",
     "build": "vite build",
     "test": "node --test test/*.js",
-    "check": "node test/integration-check.js && node test/check-real-file.js && node test/check-arcs.js && node test/check-area-select.js && node test/check-compare.js && node test/check-compare-render.js && node test/check-align.js && node test/check-printcheck.js"
+    "check": "node test/integration-check.js && node test/check-real-file.js && node test/check-arcs.js && node test/check-area-select.js && node test/check-compare.js && node test/check-compare-render.js && node test/check-align.js && node test/check-printcheck.js && node test/check-validate.js"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

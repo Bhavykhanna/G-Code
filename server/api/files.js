@@ -9,6 +9,7 @@
  * writable through the API, ever.
  */
 import { readFile, readdir, stat, realpath, open } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseGcode } from '../../src/parser/parse.js';
@@ -18,8 +19,37 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 /** `<archive>\gcode-studio` -- the app itself. */
 export const PROJECT_ROOT = path.resolve(HERE, '..', '..');
+
+/**
+ * The sandbox root: the folder whose subfolders are the jobs. Normally that is
+ * simply the folder above the app, because the app lives in `Archive\gcode-studio\`.
+ *
+ * A clone that is not inside a print archive (a fresh `git clone` anywhere, a
+ * second machine) would make that the drive root -- which finds no jobs, since
+ * they would be three levels down, and puts a recursive watch on everything.
+ * So the parent is a default, not a law; it can be pointed somewhere else:
+ *
+ *   1. `GCS_ARCHIVE`, for one run;
+ *   2. `.gcs-archive` next to the app -- one line, the path. Git-ignored, so it
+ *      stays on the machine that needs it and changes nothing anywhere else;
+ *   3. the folder above the app.
+ *
+ * On a machine that has the print archive, none of the first two exist and this
+ * is exactly what it always was. A clone with no archive can point it at
+ * `demo\` and have a real job to open.
+ */
+function resolveArchiveRoot() {
+  const fromEnv = (process.env.GCS_ARCHIVE || '').trim();
+  if (fromEnv) return path.resolve(PROJECT_ROOT, fromEnv);
+  try {
+    const fromFile = readFileSync(path.join(PROJECT_ROOT, '.gcs-archive'), 'utf8').trim();
+    if (fromFile) return path.resolve(PROJECT_ROOT, fromFile);
+  } catch { /* not there: the normal case */ }
+  return path.resolve(PROJECT_ROOT, '..');
+}
+
 /** `<archive>` -- the sandbox root. Nothing above this is reachable. */
-export const ARCHIVE_ROOT = path.resolve(PROJECT_ROOT, '..');
+export const ARCHIVE_ROOT = resolveArchiveRoot();
 
 /** Folders under the Archive root that are never jobs. */
 const SKIP_DIRS = new Set([

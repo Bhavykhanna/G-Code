@@ -8,15 +8,24 @@
  *   node scripts/dev.js            start everything and open the window
  *   node scripts/dev.js --built    build, serve dist\ from the API server (no hot reload)
  *   node scripts/dev.js --no-open  start servers only
+ *   node scripts/dev.js --force    restart even if a server is already running
  *
- * Every start first closes the previous G-code Studio window and server, so a
- * restart always ends with exactly one window on the fresh code.
+ * **Closing the app window does not stop the server**, and that is on purpose:
+ * Claude lives in a PTY inside it, so killing the server would end the session
+ * the user was in the middle of. Running this again therefore does NOT restart
+ * by default -- if a healthy server is already answering it just opens a new
+ * window onto it (user, 2026-09-19: the X left a server behind and the launcher
+ * then appeared to do nothing). `--force`, or stop-gcode-studio.bat, is the way
+ * to get a clean restart; server code changes need one.
+ *
+ * When it does start, it first closes the previous window and frees the ports,
+ * so a restart always ends with exactly one window on the fresh code.
  */
 
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, openSync, writeSync, statSync } from 'node:fs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const UI_PORT = 5173;
@@ -138,6 +147,73 @@ function clearPrevious() {
 }
 
 const BUILT = process.argv.includes('--built');
+const FORCE = process.argv.includes('--force');
+const url = BUILT ? 'http://localhost:' + API_PORT + '/' : UI_URL;
+
+/**
+ * Is a server of ours already answering? The page itself, not `/api/*`, because
+ * every API route needs the per-start token and a launcher has no business
+ * reading it.
+ */
+async function alreadyRunning() {
+  try {
+    const res = await fetch('http://127.0.0.1:' + API_PORT + '/', { signal: AbortSignal.timeout(1500) });
+    return res.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Mirror everything this process prints into .server.log, instead of letting
+ * the launcher redirect the whole command there.
+ *
+ * Why: `cmd /c ... > .server.log` takes an exclusive handle, so while an older
+ * hidden instance was alive the NEXT launch failed on the redirect before node
+ * ever ran -- the user double-clicked the .bat and nothing happened at all.
+ * Node's own file handles share, so two instances can write here safely.
+ */
+function teeToLog(append) {
+  const file = join(root, '.server.log');
+  let fd;
+  try {
+    // Appending forever would grow without a bound, so a log past a megabyte
+    // starts again. A real start always starts again.
+    let big = false;
+    try { big = statSync(file).size > 1024 * 1024; } catch { /* not there yet */ }
+    fd = openSync(file, append && !big ? 'a' : 'w');
+  } catch {
+    // EBUSY here means an instance started by the OLD launcher is still alive
+    // and holding the log through `cmd > .server.log`. Nothing to do but skip
+    // the log; it comes back on the next clean start.
+    return;
+  }
+  for (const s of [process.stdout, process.stderr]) {
+    const write = s.write.bind(s);
+    s.write = (chunk, ...rest) => {
+      // Written synchronously on purpose: the reuse path prints four lines and
+      // exits immediately, and a stream's buffer is thrown away by process.exit
+      // -- the log came out empty exactly when it was most wanted.
+      try { writeSync(fd, typeof chunk === 'string' ? chunk : Buffer.from(chunk)); } catch { /* the log is a convenience, never a blocker */ }
+      return write(chunk, ...rest);
+    };
+  }
+}
+
+const running = await alreadyRunning();
+
+// A reuse appends, so the running server's own log is not wiped from under it;
+// a real start truncates, unless the log has grown past a megabyte.
+teeToLog(running && !FORCE);
+
+if (running && !FORCE) {
+  console.log('\nG-code Studio -- a server is already answering on ' + API_PORT + '.');
+  console.log('opening a window onto it; the server and the Claude session inside it keep running.');
+  console.log('(run-gcode-studio.bat --force, or stop-gcode-studio.bat, for a clean restart --');
+  console.log(' server code changes need one.)');
+  if (!process.argv.includes('--no-open')) openWindow(url);
+  process.exit(0);
+}
 
 console.log('G-code Studio -- starting' + (BUILT ? ' (built mode, no hot reload)' : ''));
 clearPrevious();
@@ -167,7 +243,6 @@ if (!BUILT) {
   }
 }
 
-const url = BUILT ? 'http://localhost:' + API_PORT + '/' : UI_URL;
 const apiUp = await waitFor('http://127.0.0.1:' + API_PORT + '/api/jobs', 'api server');
 const uiUp = BUILT ? apiUp : await waitFor(UI_URL, 'vite');
 

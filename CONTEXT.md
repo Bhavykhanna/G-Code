@@ -1,6 +1,6 @@
 # G-code Studio — main context
 
-Last updated: 2026-09-18
+Last updated: 2026-09-19
 
 A 3D G-code viewer, region selector and edit/re-slice loop for the **Elegoo Neptune 4 Max**,
 with Claude Code running inside the app. Sits next to the jobs in `..\` (`phonecase-16pro\`,
@@ -126,10 +126,19 @@ result compare**, not a 509-setting GUI. A settings GUI is deliberately deferred
 | Diff (compare) | **done, approved by the user** | plastic-per-layer matching; moved screw holes green, old ones red at 55 %; see docs/CONTEXT-compare.md |
 | Claude in the app | **built, in daily use** | live terminal; attach; token on the API — see docs/CONTEXT-terminal.md. The mailbox panel was removed |
 
-`npm run check` → integration 28/28, real file, arcs, area select, compare, compare render and align all pass
-(B12 fixed 2026-09-17). `node test/server-all.js`
-→ all 6 files pass; `npm test` reports server files failing only because they run in parallel (B13).
-Server tests use their own bridge folder (`test/_isolate.js`), so they no longer disturb the running app.
+`npm run check` → integration 28/28, plus real file, arcs, area select, compare, compare render, align,
+print check and the validator's portable rules (B12 fixed 2026-09-17; `check-validate.js` added
+2026-09-19). `node test/server-all.js` → **all 6 files, 402 checks, 0 failed** (smoke 100, edit 65,
+diff 82, chat 23, terminal 102, slice 30); `npm test` reports server files failing only because they
+run in parallel (B13). Server tests use their own bridge folder (`test/_isolate.js`, next to the app
+since 2026-09-19), so they no longer disturb the running app.
+
+**Both suites run on a clone with no print archive** (2026-09-19, B16). The subject file is discovered
+from `demo\` or from `/api/jobs` rather than named, and what the routes answer is checked against a
+parse the test does itself instead of against remembered constants — so nothing pins a private file
+name or a byte count. The archive-only stories (the ironing pair, the centring history, the known
+print-check findings) are gated behind `test/fixtures.local.js` and print a `skip` line without it;
+its full shape is documented at the top of `test/fixtures.js`.
 
 ## Known issues, open
 
@@ -335,6 +344,12 @@ reopens the last open file on start. See context-local\TODO.md / BUGS.md for wha
 tested by `test/check-printcheck.js` (in `npm run check`). Written after the enclosure base v3 printed with melted,
 blackened opening tops. Calibrated on the enclosure base, the lid and both phone cases: base v3 36 HIGH (divider bars,
 opening tops, pad pockets, holder dots), lid 0, phone cases 0-1.
+**Screw seats, corrected 2026-09-19 (B17):** `checkScrewSeats` called the hexagon cut-outs of a phone case screw holes.
+A hole's roundness is now measured **along** the path (`loopShape`, a sample every 0.3 mm) instead of at the ends of the
+moves, where every point of a straight-edged hole is a corner and any polygon looks perfectly round; and a head pocket
+must be **1.25 x** the shaft radius, not merely 0.6 mm wider, which first-layer widening reaches by itself. The demo
+files went 4 HIGH → 0 HIGH with nothing else in the report changed. The real screw-hole files live on the archive
+machine, so the guard against breaking the true positive is four synthetic cases in `test/check-printcheck.js`.
 **Launcher (2026-09-17):** the server runs without a console window; output in `.server.log`; `stop-gcode-studio.bat`
 closes window + server. Not yet started this way (it needs the next launch).
 
@@ -355,3 +370,50 @@ exception: `demo\`. See [docs/CONTEXT-git.md](docs/CONTEXT-git.md).
 **Demo job** (`demo\phonecase-17pro\`): the finished iPhone 17 Pro cover — current version with its
 printer preview, the previous version so Diff has a base, the STL and the three profiles. 11 MB, so a
 clone can open, diff, check and re-slice a real file without the print archive.
+
+## Update 2026-09-19 (later) — the repo run as a clone, on a machine with no print archive
+
+The first clone of this repo would not start. Two defects, both now fixed, both in
+[BUGS.md](BUGS.md) with the detail:
+
+1. **`.gitignore` swallowed `src\bridge\`.** The pattern was `bridge/` with no leading slash, so it
+   matched the app's own server client as well as the runtime hand-over folder. The build died on
+   `Could not resolve "./bridge/client.js"` and the window came up as the mock harness — exactly the
+   trap `context\findings.md` warns about. The pattern is now `/bridge/`, and `src\bridge\client.js`
+   was **rebuilt from the API contract**, not recovered. ⚠️ **Compare it with the original on the
+   archive machine before keeping this copy.**
+2. **The sandbox root assumed the app sits in an archive.** It is now `GCS_ARCHIVE`, else a
+   git-ignored `.gcs-archive` file, else the folder above — see
+   [docs/CONTEXT-server.md](docs/CONTEXT-server.md). A clone points it at `demo`.
+
+**First real run on the second machine** (2026-09-19, `run-gcode-studio.bat`, archive root `demo\`):
+the demo job and both its versions listed, all three profiles found, `/api/meta` parsed **92,664
+moves, 57 layers, 49m 15s in 237 ms**, the app window connected to the SSE stream and the Claude PTY
+started. No startup error reported.
+
+**How machine-specific this app actually is** — measured against foreign G-code the same day and
+written up in [context/other-printers.md](context/other-printers.md): the viewer follows the file
+(bed, envelope, temps, limits all come from the `CONFIG_BLOCK`), while the annotations it reads come
+from *this* profile's custom G-code and Orca's feature wording, and the re-slice lane is
+ElegooSlicer's. Three defects that measurement found, **all fixed the same day**:
+
+- **B15** — writing was locked to this machine: the validator required this profile's five end
+  markers. An edit is now held against **the end sequence of the file it came from**, so this
+  printer's files are policed exactly as hard as before and another printer's by its own ending.
+  Approved by the user as a safety-rule change. On the way, a hole: the check searched the
+  CONFIG_BLOCK, which quotes `machine_end_gcode`, so a file whose real ending had been deleted still
+  passed. The tail is cut at `; CONFIG_BLOCK_START` now.
+- **B14** — a file without `machine_max_speed_x` got a maximum feedrate of 0, so every move failed.
+- **B16** — `npm run check` crashed instead of skipping on a clone. `test/fixtures.js` now also finds
+  the demo job by looking in `demo\`, and the checks that need only "a real print" use it. Green on a
+  clone: 28/28 plus every real-file check.
+
+**And the byte-identical re-slice claim was tested properly for the first time.** It holds — but the
+check that said otherwise was reading a file **git had rewritten**: `core.autocrlf=true` with no
+`.gitattributes` checks the demo G-code out as CRLF, 3,088,226 bytes against the 2,963,504 that were
+committed. The slicer writes LF. A `.gitattributes` (`*.gcode -text`) now says a print file is bytes,
+and `server-slice.js` slices twice and compares the two outputs, which needs no repository at all:
+**30 checks, 0 failed, slicer 1.70–1.73 s.**
+
+**Git:** the remote is `https://github.com/Bhavykhanna/G-Code.git` — see
+[docs/CONTEXT-git.md](docs/CONTEXT-git.md).
